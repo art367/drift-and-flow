@@ -263,6 +263,60 @@ function buildAudio() {
   }
   setTimeout(singingBowl, 10000);
 
+  // ─── WHALE SONG (frequency sweeps + harmonics) ───
+  function whaleSong() {
+    if (!audioStarted) return;
+    const t0 = ac.currentTime;
+    const duration = 6 + Math.random() * 8;
+    // Main voice — long gliding tone
+    const o1 = ac.createOscillator();
+    const g1 = ac.createGain();
+    const f1 = ac.createBiquadFilter();
+    o1.type = 'sine';
+    const startFreq = 80 + Math.random() * 60;
+    const endFreq = startFreq + (Math.random() > 0.5 ? 1 : -1) * (30 + Math.random() * 50);
+    o1.frequency.setValueAtTime(startFreq, t0);
+    o1.frequency.linearRampToValueAtTime(endFreq, t0 + duration * 0.6);
+    o1.frequency.linearRampToValueAtTime(startFreq + (endFreq - startFreq) * 0.3, t0 + duration);
+    f1.type = 'lowpass'; f1.frequency.value = 600; f1.Q.value = 2;
+    g1.gain.setValueAtTime(0, t0);
+    g1.gain.linearRampToValueAtTime(0.06 * globalDim, t0 + 2);
+    g1.gain.setValueAtTime(0.06 * globalDim, t0 + duration - 3);
+    g1.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+    o1.connect(f1); f1.connect(g1); g1.connect(comp);
+    toReverb(g1);
+    // Harmonic — higher overtone
+    const o2 = ac.createOscillator();
+    const g2 = ac.createGain();
+    o2.type = 'sine';
+    o2.frequency.setValueAtTime(startFreq * 1.5, t0);
+    o2.frequency.linearRampToValueAtTime(endFreq * 1.5, t0 + duration * 0.6);
+    o2.frequency.linearRampToValueAtTime((startFreq + (endFreq - startFreq) * 0.3) * 1.5, t0 + duration);
+    g2.gain.setValueAtTime(0, t0);
+    g2.gain.linearRampToValueAtTime(0.025 * globalDim, t0 + 2.5);
+    g2.gain.exponentialRampToValueAtTime(0.001, t0 + duration - 1);
+    o2.connect(g2); g2.connect(comp);
+    toReverb(g2);
+    // Sub rumble
+    const o3 = ac.createOscillator();
+    const g3 = ac.createGain();
+    o3.type = 'sine';
+    o3.frequency.value = startFreq * 0.5;
+    g3.gain.setValueAtTime(0, t0);
+    g3.gain.linearRampToValueAtTime(0.04 * globalDim, t0 + 1.5);
+    g3.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+    o3.connect(g3); g3.connect(comp);
+    o1.start(t0); o2.start(t0); o3.start(t0);
+    o1.stop(t0 + duration + 1); o2.stop(t0 + duration + 1); o3.stop(t0 + duration + 1);
+    // Occasional second call (response) after a pause
+    if (Math.random() > 0.5) {
+      setTimeout(() => whaleSong(), (duration + 2 + Math.random() * 3) * 1000);
+    }
+    // Next whale song cycle
+    setTimeout(whaleSong, (duration + 15 + Math.random() * 35) * 1000);
+  }
+  setTimeout(whaleSong, 6000);
+
   // Sound toggle button
   let muted = false;
   document.getElementById('sound-btn').addEventListener('click', (e) => {
@@ -483,6 +537,153 @@ class Ripple {
 }
 
 // ═══════════════════════════════════════════
+//  FISH SHOALS (boid-like schooling)
+// ═══════════════════════════════════════════
+let fishShoals = [];
+
+class Fish {
+  constructor(shoalIndex) {
+    this.shoalIndex = shoalIndex;
+    this.x = Math.random() * W;
+    this.y = Math.random() * H;
+    this.vx = (Math.random() - 0.5) * 0.8;
+    this.vy = (Math.random() - 0.5) * 0.8;
+    this.size = 3 + Math.random() * 3;
+    this.tailPhase = Math.random() * Math.PI * 2;
+    this.tailSpeed = 0.12 + Math.random() * 0.06;
+    this.alpha = 0.35 + Math.random() * 0.25;
+  }
+  update(shoal) {
+    this.tailPhase += this.tailSpeed;
+    const maxSpeed = 1.8;
+
+    // ── Follow finger (strongest force) ──
+    if (mouse.active) {
+      const dx = mouse.x - this.x, dy = mouse.y - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 350) {
+        const pull = (1 - dist / 350) * 0.06;
+        this.vx += dx / dist * pull;
+        this.vy += dy / dist * pull;
+      }
+    }
+
+    // ── Boid rules (cohesion, alignment, separation) ──
+    let cx = 0, cy = 0, ax = 0, ay = 0, sx = 0, sy = 0;
+    let neighbors = 0;
+    for (const other of shoal) {
+      if (other === this) continue;
+      const dx = other.x - this.x, dy = other.y - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 80) {
+        // Cohesion — move toward center of neighbors
+        cx += other.x; cy += other.y;
+        // Alignment — match velocity
+        ax += other.vx; ay += other.vy;
+        neighbors++;
+        // Separation — avoid crowding
+        if (dist < 20) {
+          sx -= dx / dist * 0.15;
+          sy -= dy / dist * 0.15;
+        }
+      }
+    }
+    if (neighbors > 0) {
+      cx = cx / neighbors; cy = cy / neighbors;
+      this.vx += (cx - this.x) * 0.003; // cohesion
+      this.vy += (cy - this.y) * 0.003;
+      this.vx += (ax / neighbors - this.vx) * 0.02; // alignment
+      this.vy += (ay / neighbors - this.vy) * 0.02;
+    }
+    this.vx += sx; this.vy += sy; // separation
+
+    // ── Gentle wander ──
+    this.vx += (Math.random() - 0.5) * 0.04;
+    this.vy += (Math.random() - 0.5) * 0.04;
+
+    // Speed limit
+    const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+    if (spd > maxSpeed) { this.vx = (this.vx / spd) * maxSpeed; this.vy = (this.vy / spd) * maxSpeed; }
+
+    // Friction
+    this.vx *= 0.995; this.vy *= 0.995;
+
+    this.x += this.vx; this.y += this.vy;
+
+    // Wrap edges softly
+    const margin = 40;
+    if (this.x < -margin) this.x = W + margin;
+    if (this.x > W + margin) this.x = -margin;
+    if (this.y < -margin) this.y = H + margin;
+    if (this.y > H + margin) this.y = -margin;
+  }
+  draw() {
+    const a = this.alpha * globalDim;
+    if (a < 0.005) return;
+    const angle = Math.atan2(this.vy, this.vx);
+    const tailWag = Math.sin(this.tailPhase) * 0.35;
+    const s = this.size;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(angle);
+
+    // Body glow
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${195 + this.shoalIndex * 30}, 80%, 70%, ${a * 0.06})`;
+    ctx.fill();
+
+    // Body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s, s * 0.45, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${195 + this.shoalIndex * 30}, 75%, 75%, ${a * 0.7})`;
+    ctx.fill();
+
+    // Tail
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.6, 0);
+    ctx.lineTo(-s * 1.6, s * 0.5 + tailWag * s * 0.3);
+    ctx.lineTo(-s * 1.6, -s * 0.5 + tailWag * s * 0.3);
+    ctx.closePath();
+    ctx.fillStyle = `hsla(${195 + this.shoalIndex * 30}, 70%, 70%, ${a * 0.5})`;
+    ctx.fill();
+
+    // Eye dot
+    ctx.beginPath();
+    ctx.arc(s * 0.4, -s * 0.08, s * 0.12, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(190, 100%, 90%, ${a * 0.8})`;
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+function initFish() {
+  fishShoals = [];
+  const shoalCount = 3;
+  const fishPerShoal = 12;
+  for (let s = 0; s < shoalCount; s++) {
+    const shoal = [];
+    const cx = Math.random() * W, cy = Math.random() * H;
+    for (let i = 0; i < fishPerShoal; i++) {
+      const f = new Fish(s);
+      f.x = cx + (Math.random() - 0.5) * 100;
+      f.y = cy + (Math.random() - 0.5) * 100;
+      shoal.push(f);
+    }
+    fishShoals.push(shoal);
+  }
+}
+
+function updateAndDrawFish() {
+  for (const shoal of fishShoals) {
+    for (const f of shoal) { f.update(shoal); }
+    for (const f of shoal) { f.draw(); }
+  }
+}
+
+// ═══════════════════════════════════════════
 //  MOUSE TRAIL
 // ═══════════════════════════════════════════
 function drawMouseTrail() {
@@ -580,6 +781,7 @@ function startGame() {
   startTime = lastInteraction = performance.now();
   for (let i = 0; i < 90; i++) particles.push(new Particle());
   for (let i = 0; i < 9; i++) jellyfish.push(new Jellyfish());
+  initFish();
   animate();
 }
 overlay.addEventListener('click', startGame);
@@ -607,6 +809,7 @@ function animate() {
   drawBreathingOrb(bv);
   for (const p of particles) { p.update(bv); p.draw(); }
   for (const j of jellyfish) { j.update(); j.draw(); }
+  updateAndDrawFish();
   ripples = ripples.filter(r => { r.draw(); return r.update(); });
   drawMouseTrail();
   if (!mouse.active && mouseTrail.length > 0) mouseTrail.shift();
